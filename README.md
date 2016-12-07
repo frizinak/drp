@@ -5,14 +5,14 @@ see [frizinak/provision.sh](https://github.com/frizinak/provision.sh) for more i
 wont work out of the box yet, will try to get to it soon.
 
 if you don't mind tinkering you could change `provdir` to the dir where you
-clone frizinak/provision.sh and change all occurrences of friz.pro to whatever
+cloned frizinak/provision.sh and change all occurrences of friz.pro to whatever
 domain you've added to digital ocean, if any.
 
 # in short:
 
 wraps provision.sh to create a droplet and provision it
 
-use a systemd-inotify-rsync user service to upload files to the droplet
+creates and manages a systemd-inotify-rsync user service to upload files to the droplet
 
 (seems to be the fastest way to sync files out of all methods i've tried, except for nfs which is way to inconvenient, you know ports and stuff. Seemingly faster or identical performance to my local vagrant+nfs setup ymmv)
 
@@ -43,7 +43,7 @@ droplet_size=     # required
 e.g.:
 
 ```
-sitekey=myD7Site
+sitekey=my-d7-site
 db=d7db
 droplet_size=512mb
 php=php5.6
@@ -59,14 +59,17 @@ cache_form'                  # The table definitions will be exported but data w
 ```
 
 run
--`drp init` create and provision without apt-get update
--`drp init -u` apt-get update
--`drp init -uu` apt-get update && apt-get upgrade
+
+- `drp init` create and provision without apt-get update
+- `drp init -u` apt-get update
+- `drp init -uu` apt-get update && apt-get upgrade
 
 you will be prompted for the 'admin user' which atm is `asdf` (as configured in provision.sh/src/provision/config.sh)
 
 you will encounter no bugs or inconveniences as this script is impeccable...
 
+`drp dump` and `drp import-db` to respectively dump and import databases to/from {repo-root}/drp/dumps/dbdump-YYYY-MM-DD--HH-II.sql.gz
+
 ok whatever just do `drp -h`
 
-
+;)
