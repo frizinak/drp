@@ -1,0 +1,545 @@
+#! /bin/bash
+
+set -e
+
+log () {
+    echo -en "\033[32m$(date +%H-%M-%S)\033[0m > \033[1m$*\033[0m"
+}
+
+err () {
+    echo -en "\033[31m$(date +%H-%M-%S)\033[0m > \033[1;31m$*\033[0m" >&2
+}
+
+show_help () {
+    local data=$( \
+        cat "$0" | grep -A100 -e '^### DRP ###'  | grep -oe '^\s*#.*' -Eoe '^\s+[a-z0-9|\-]+\).*' \
+        | grep -ve '^\s*#!' \
+        | cut -d')' -f1- --output-delimiter=$' ' \
+    )
+
+    local IFS=$'\n'
+    for i in $data; do
+        if echo "$i" | grep '^\s*#' >/dev/null; then
+            echo
+            echo -e "\033[1m$i\033[0m"
+            continue
+        fi
+        echo "$i"
+    done
+}
+
+show_config () {
+    cat <<EOF
+sitekey=          # required
+db=               # required
+droplet_size=     # required
+# db_ignore=      # optional list of tables to ignore when mysqldumping
+# host=           # optional defaults to \$sitekey.
+# files=''        # optional list of paths that are downloaded with '$0 files'.
+# image=          # optional image to create the droplet from, defaults to '$image'.
+# provisioners=   # optional comma separated set of provisioners. defaults to '$provisioners'.
+# docroot=        # optional docroot name, depends on '\$provisioners'.
+# php=            # optional php binary that will be used for php related commands (drush).
+# drupal_version= # optional drupal version, defaults to 8.
+# ignore=         # optional set of rsync --excludes.
+# packages=       # optional set of apt packages to install after provisioning.
+# make=           # optional command to run when '$0 make' is called.
+# make_admin=     # optional command to run when '$0 make_admin' is called.
+EOF
+}
+
+me="$0"
+user=www-main
+admin=asdf
+
+src="$(realpath .)"
+php='php'
+drupal_version=8
+docroot='seven'
+provisioners='php7:seven'
+image='php-7-dev-ubuntu-16'
+make='echo no make defined'
+make_admin='echo no make_admin defined'
+
+if [ "$1" == "config" ]; then
+    show_config
+    exit 0
+elif [ "$1" == "-h" ] || [ "$1" == "--help" ] || [ "$1" == "help" ]; then
+    show_help
+    exit 0
+fi
+
+if [ ! -e .drp ]; then
+    gitroot=$(git rev-parse --show-toplevel 2>/dev/null || true)
+    if [ "$gitroot" != "" ]; then
+        cd "$gitroot"
+        src="$(realpath .)"
+    fi
+    if [ ! -e .drp ]; then
+        err "No .drp file\n"
+        show_config
+        exit 1
+    fi
+fi
+
+source .drp
+
+if [ "$sitekey" == "" ] || \
+    [ "$db" == "" ] || \
+    [ "$droplet_size" == "" ]; then
+
+    err "Invalid .drp file\n"
+    show_config
+    exit 1
+fi
+
+onExit () {
+    pause_service 1
+
+    local jbs=$(jobs -p)
+    if [ "$jbs" != "" ]; then
+        kill $(jobs -p) #2>/dev/null || true
+    fi
+}
+
+trap onExit EXIT SIGINT
+
+provdir="$HOME/dev/server"
+dumps="$src/drp/dumps"
+syncs="$src/drp/sync"
+rsync_args="--exclude 'drp/' --exclude '.git' --exclude '*.sql.gz' --exclude '*.vim-mru' --exclude '.vim-tags'"
+
+if [ "$ignore" == "" ]; then
+    ignore=""
+fi
+
+set -f
+for i in $ignore; do
+    rsync_args="$rsync_args --exclude '$i'"
+done
+rsync_sync_args="$rsync_args"
+set +f
+
+service="drp-$sitekey.service"
+servicedir="$HOME/.config/systemd/user"
+
+if [ "$host" == "" ]; then
+    host="$sitekey"
+fi
+
+prov="$provdir/servers/friz.pro/$host/"provision*.sh
+destroy="$provdir/servers/friz.pro/$host/"destroy*.sh
+info="$provdir/servers/friz.pro/$host/"info*.yml
+
+dst="/home/$user/web/$docroot"
+
+server_info () {
+    if [ "$ip" == "" ]; then
+        ip="$(cat $info | grep public_ipv4 | cut -d':' -f2)"
+    fi
+}
+
+install_packages () {
+    if [ "$packages" == "" ]; then
+        return 0
+    fi
+
+    server_info
+
+    ssh -4 -ttt $admin@$ip '
+list="'"$packages"'"
+for i in "$list"; do
+    if ! sudo dpkg --status "$i" >/dev/null 2>&1; then
+        list="${list} ${i}"
+    fi
+done
+
+if [ "$list" != "" ]; then
+    sudo apt-get install -y $list
+fi
+'
+}
+
+provision () {
+    pause_service
+
+    cd "$provdir"
+
+    if [ ! -f $prov ]; then
+        ./droplet.sh "$host.friz.pro" ams3 $droplet_size "$image" -y
+    fi
+
+    cd "$src"
+    server_info
+    cd "$provdir"
+    $prov $provisioners "$1"
+
+    cd "$src"
+}
+
+destroy () {
+    local confirm
+
+    log "Are you sure you wish to delete $(basename $destroy)? [y/N] "
+    read -n1 confirm
+    echo
+    if [ "$confirm" == "y" ]; then
+        cd "$provdir"
+        $destroy
+        cd "$src"
+    fi
+}
+
+update_code () {
+    server_info
+
+    time eval rsync --delete -az --info=DEL,REMOVE,STATS "$src/" -e ssh $user@$ip:$dst/ $rsync_args
+    log "Code synced\n"
+}
+
+run_make () {
+    exec_remote "cd $dst && $make"
+}
+
+run_make_admin () {
+    exec_remote_admin "cd $dst && $make_admin"
+}
+
+update_loop () {
+    local sync=
+    local last=0
+    local IFS=$'\n'
+    local f
+    local path
+
+    mkdir -p "$(dirname "$syncs")" 2>/dev/null || true
+    touch "$syncs"
+
+    server_info
+
+    inotifywait -r -m \
+        -e close_write -e delete \
+        --format '%w%f' \
+        --exclude '\.vim-mru|4913|.*.sql.gz|\.git' \
+        "$src" | \
+        while read f; do
+            if [ "$f" == "$syncs" ]; then
+                continue
+            fi
+            echo "$(dirname "$f")" >> "$syncs"
+        done &
+
+        while true; do
+            sleep 1
+            sync=$(cat "$syncs" | sort | uniq)
+            if [ "$sync" == "" ]; then
+                continue
+            fi
+            echo > "$syncs"
+            for f in $sync; do
+                path=${f#"$src/"}
+                if [ ! -e "$f" ]; then
+                    path="$(dirname "$path")"
+                fi
+
+                if [ "$path" == "$src" ]; then
+                    path=''
+                fi
+
+                log "Syncing $src/$path\n"
+                eval rsync -a --delete --info=DEL,REMOVE,STATS "$src/$path/" \
+                    -e ssh $user@$ip:"$dst/$path" \
+                    $rsync_sync_args
+            done
+        done;
+}
+
+install_service () {
+    mkdir -p "$servicedir" 2>/dev/null || true
+    cat > "$servicedir/$service" <<EOF
+[Unit]
+Description=drp for $sitekey
+After=network.target
+
+[Service]
+Environment='SSH_AGENT_PID=$SSH_AGENT_PID' 'SSH_AUTH_SOCK=$SSH_AUTH_SOCK'
+Type=simple
+ExecStart=$0 _run
+WorkingDirectory=$src
+PrivateTmp=true
+LimitNOFILE=10032
+RestartSec=2
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl --user daemon-reload
+
+    log "Installed service\n"
+}
+
+start_service () {
+    systemctl --user restart "$service" 2>/dev/null
+    log "Restarted service\n"
+}
+
+stop_service () {
+    systemctl --user stop "$service"
+    log "Stopped service\n"
+}
+
+pause_service () {
+    if [ "$was_running" == "" ]; then
+        if [ "$1" == "1" ]; then
+            return
+        fi
+
+        was_running=$( \
+            systemctl --user is-active "$service" >/dev/null 2>&1 \
+            && echo 0 || echo $? \
+        )
+
+        if [ $was_running -eq 0 ]; then
+            stop_service
+        fi
+
+        return 0
+    fi
+
+    if [ $was_running -eq 0 ]; then
+        start_service
+    fi
+}
+
+status_service () {
+    systemctl --user status "$service" | cat
+}
+
+uninstall_service () {
+    stop_service 2>/dev/null || true
+    rm "$servicedir/$service" 2>/dev/null || true
+    systemctl --user daemon-reload
+    log "Uninstalled service\n"
+}
+
+exec_remote () {
+    server_info
+
+    ssh $user@$ip "$@"
+}
+
+exec_remote_admin () {
+    server_info
+
+    ssh $admin@$ip "$@"
+}
+
+drush () {
+    exec_remote $php .config/composer/vendor/bin/drush.php -r "$dst/$drush_root" $@
+}
+
+import_settings () {
+    drush updb -y
+    if [ "$drupal_version" == "8" ]; then
+        drush config-import -y
+        drush cache-rebuild -y
+        return
+    fi
+
+    drush fra -y
+    drush cc all
+}
+
+export_settings () {
+    server_info
+
+    if [ "$drupal_version" != "8" ]; then
+        err "Not supported\n"
+        err "Use this to sync: \n\n"
+        echo "dir=<dir> rsync -av --delete -e ssh $user@$ip:"'"'"$dst"'/$dir"'" ./\$dir"
+
+        return 1
+    fi
+
+    pause_service
+
+    drush config-export -y
+    rsync -av --delete -e ssh $user@$ip:"$dst/config/" "$src/config"
+}
+
+import_db () {
+    server_info
+
+    local dump="$(ls -1 "$dumps/"dbdump-*.sql.gz | sort | tail -n1)"
+
+    ssh $admin@$ip "mysql -e 'create database $db;'" 2>/dev/null || true
+    if [ -f "$dump" ]; then
+        log "Dropping original db\n"
+        ssh $admin@$ip "mysql -e 'drop database $db; create database $db;'"
+        log "Importing db\n"
+        cat "$dump" | ssh $admin@$ip "gzip -d | mysql $db";
+        return 0
+    fi
+
+    err "Not importing db"
+}
+
+export_db () {
+    server_info
+    local ignores f
+
+    for i in $db_ignore; do
+        ignores="$ignores --ignore-table=${db}.${i}"
+    done
+
+    mkdir -p "$dumps" 2>/dev/null || true
+
+    f="$dumps/dbdump-$(date +%Y-%m-%d--%H-%M).sql.gz"
+
+    { \
+        ssh $admin@$ip "mysqldump -d $db | gzip"; \
+        ssh $admin@$ip "mysqldump $db $ignores | gzip"; \
+    } > "$f"
+
+    remove=$(ls -1 "$dumps/dbdump-"*.sql.gz | sort | head -n-10)
+    if [ "$remove" != "" ]; then
+        rm $remove
+    fi
+}
+
+export_files () {
+    local file
+
+    pause_service
+    server_info
+
+    if [ "$files" == "" ]; then
+        exit;
+    fi
+
+    for file in $files; do
+        if [ "$file" == "" ]; then
+            continue
+        fi
+
+        log "Fetching $file\n"
+        rsync -av -e ssh $user@$ip:"$dst/$file/" \
+            "$src/$file" \
+            $rsync_args
+    done
+    log "Fetched files\n"
+}
+
+### DRP ###
+case $1 in
+
+# Droplet
+    init)              # Provision, import db, sync files, import settings and install service
+        provision "$2"
+        import_db
+        update_code
+        install_packages
+        install_service
+        start_service
+        ;;
+    prov)              # Provision
+        provision "$2"
+        install_packages
+        ;;
+    pkgs)              # Project specific packages from .drp::packages
+        install_packages
+        ;;
+    destroy)           # Destroy droplet and uninstall service
+        uninstall_service
+        destroy
+        ;;
+
+# SSH:
+    ssh)               # Start interactive ssh session [second arg = user, defaults to www-main]
+        server_info
+
+        u="$2"
+        ssh -ttt "${u:=$user}"@$ip
+        ;;
+    eval|ev)           # Execute remote command
+        shift
+        exec_remote "$@"
+        ;;
+
+# DB:
+    dump|db)           # Dump the database and store in ./drp/dumps
+        export_db
+        ;;
+
+    import-db)         # Import latest dump
+        import_db
+        ;;
+
+# Files:
+    files|df)          # Rsync files to whatever is configured in .drp::files
+        export_files
+        ;;
+
+# Make
+    make)              # Run whatever is defined in 'make'
+        run_make
+        ;;
+    make-admin)              # Run whatever is defined in 'make'
+        run_make_admin
+        ;;
+
+# Drupal:
+
+  ## generic:
+    drush|dr)          # Same as eval drush ...
+        shift
+        drush "$@"
+        ;;
+
+  ## settings:
+    import|i)          # drush config-import
+        import_settings
+        ;;
+    export|e)          # drush config-export and rsync
+        export_settings
+        ;;
+
+# RSync deamon
+    start)             # Install service and run it [rsyncing files continuously]
+        install_service
+        start_service
+        ;;
+    status)            # Get service status
+        status_service
+        ;;
+    stop)              # Stop the service
+        stop_service
+        ;;
+    uninstall)         # Remove the service [will be restored on the next 'start']
+        uninstall_service
+        ;;
+    sync)              # Sync all files
+        update_code
+        ;;
+
+# Info
+    ip)                # Get server ip
+        server_info
+        echo "$ip";
+        ;;
+    config)            # Print example config
+        #! dummy, see above
+        ;;
+    help|-h|--help)    # This
+        #! dummy, see above
+        ;;
+    _run)
+        update_loop
+        ;;
+    *)
+        show_help
+        ;;
+esac
+
