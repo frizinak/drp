@@ -34,6 +34,7 @@ sitekey=          # required
 db=               # required
 droplet_size=     # required
 # db_ignore=      # optional list of tables to ignore when mysqldumping
+# db_settings     # optional sql commands to execute during db import
 # host=           # optional defaults to \$sitekey.
 # files=''        # optional list of paths that are downloaded with '$0 files'.
 # image=          # optional image to create the droplet from, defaults to '$image'.
@@ -337,7 +338,7 @@ exec_remote_admin () {
 }
 
 drush () {
-    exec_remote $php .config/composer/vendor/bin/drush.php -r "$dst/$drush_root" $@
+    exec_remote $php .config/composer/vendor/bin/drush.php --php=/usr/bin/$php -r "$dst/$drush_root" $@
 }
 
 import_settings () {
@@ -380,6 +381,7 @@ import_db () {
         ssh $admin@$ip "mysql -e 'drop database $db; create database $db;'"
         log "Importing db\n"
         cat "$dump" | ssh $admin@$ip "gzip -d | mysql $db";
+        { echo "$db_settings" | gzip && cat "$dump"; } | ssh $admin@$ip "gzip -d | mysql $db";
         return 0
     fi
 
