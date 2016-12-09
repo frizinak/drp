@@ -34,7 +34,7 @@ sitekey=          # required
 db=               # required
 droplet_size=     # required
 # db_ignore=      # optional list of tables to ignore when mysqldumping
-# db_settings     # optional sql commands to execute during db import
+# db_settings=    # optional sql commands to execute during db import
 # host=           # optional defaults to \$sitekey.
 # files=''        # optional list of paths that are downloaded with '$0 files'.
 # image=          # optional image to create the droplet from, defaults to '$image'.
@@ -380,7 +380,6 @@ import_db () {
         log "Dropping original db\n"
         ssh $admin@$ip "mysql -e 'drop database $db; create database $db;'"
         log "Importing db\n"
-        cat "$dump" | ssh $admin@$ip "gzip -d | mysql $db";
         { echo "$db_settings" | gzip && cat "$dump"; } | ssh $admin@$ip "gzip -d | mysql $db";
         return 0
     fi
