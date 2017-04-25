@@ -497,7 +497,7 @@ case $1 in
   ## generic:
     drush|dr)          # Same as eval drush ...
         shift
-        drush "$@"
+        drush $@
         ;;
 
   ## settings:
