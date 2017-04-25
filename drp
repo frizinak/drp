@@ -194,6 +194,7 @@ destroy () {
 update_code () {
     server_info
 
+    exec_remote "mkdir -p $dst" || true
     time eval rsync --delete -az --info=DEL,REMOVE,STATS "$src/" -e ssh $user@$ip:$dst/ $rsync_args
     log "Code synced\n"
 }
