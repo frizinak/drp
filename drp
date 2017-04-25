@@ -375,11 +375,11 @@ import_db () {
 
     local dump="$(ls -1 "$dumps/"dbdump-*.sql.gz | sort | tail -n1)"
 
-    ssh $admin@$ip "mysql -e 'create database $db;'" 2>/dev/null || true
+    ssh $admin@$ip "mysql -e 'create database \`$db\`;'" 2>/dev/null || true
     if [ -f "$dump" ]; then
         log "Dropping original db\n"
-        ssh $admin@$ip "mysql -e 'drop database $db; create database $db;'"
-        log "Importing db\n"
+        ssh $admin@$ip "mysql -e 'drop database \`$db\`; create database \`$db\`;'"
+        log "Importing db $dump\n"
         { echo "$db_settings" | gzip && cat "$dump"; } | ssh $admin@$ip "gzip -d | mysql $db";
         return 0
     fi
