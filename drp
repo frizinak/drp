@@ -126,12 +126,12 @@ servicedir="$HOME/.config/systemd/user"
 has_systemctl=$(systemctl --user &>/dev/null; echo $?)
 
 if [ "$host" == "" ]; then
-    host="$sitekey"
+    host="$sitekey.friz.pro"
 fi
 
-prov="$provdir/servers/friz.pro/$host/"provision*.sh
-destroy="$provdir/servers/friz.pro/$host/"destroy*.sh
-info="$provdir/servers/friz.pro/$host/"info*.yml
+prov="$provdir/servers/$host/"provision*.sh
+destroy="$provdir/servers/$host/"destroy*.sh
+info="$provdir/servers/$host/"info*.yml
 
 dst="/home/$user/web/$docroot"
 
@@ -168,7 +168,7 @@ provision () {
     cd "$provdir"
 
     if [ ! -f $prov ]; then
-        ./droplet.sh "$host.friz.pro" ams3 $droplet_size "$image" -y
+        ./droplet.sh "$host" ams3 $droplet_size "$image" -y
     fi
 
     cd "$src"
