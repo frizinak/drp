@@ -123,6 +123,7 @@ set +f
 
 service="drp-$sitekey.service"
 servicedir="$HOME/.config/systemd/user"
+has_systemctl=$(systemctl --user &>/dev/null; echo $?)
 
 if [ "$host" == "" ]; then
     host="$sitekey"
@@ -257,6 +258,10 @@ update_loop () {
 }
 
 install_service () {
+    if [ "$has_systemctl" != "0" ]; then
+        return;
+    fi
+
     mkdir -p "$servicedir" 2>/dev/null || true
     cat > "$servicedir/$service" <<EOF
 [Unit]
@@ -283,13 +288,49 @@ EOF
 }
 
 start_service () {
+    if [ "$has_systemctl" != "0" ]; then
+        stop_service
+        "$me" _run &> log &
+        local pid=$!
+        echo $pid > .drp.pid
+        disown $pid
+        log "Started service\n"
+        return 0;
+    fi
+
     systemctl --user restart "$service" 2>/dev/null
     log "Restarted service\n"
 }
 
 stop_service () {
+    if [ "$has_systemctl" != "0" ]; then
+        local pid=$(cat .drp.pid 2>/dev/null);
+        if [ "$pid" != "" ] \
+            && ps -p $(cat .drp.pid) -o cmd= | grep "$me" &>/dev/null; then
+            kill $pid
+        fi
+        log "Stopped service\n"
+        return 0;
+    fi
+
     systemctl --user stop "$service"
     log "Stopped service\n"
+}
+
+is_service_running () {
+    if [ "$has_systemctl" != "0" ]; then
+        local pid=$(cat .drp.pid 2>/dev/null);
+        if [ "$pid" != "" ] \
+            && ps -p $(cat .drp.pid) -o cmd= | grep "$me" &>/dev/null; then
+            echo 0
+            return 0
+        fi
+
+        echo 1
+        return 0
+    fi
+
+    systemctl --user is-active "$service" >/dev/null 2>&1 && echo 0 || echo $?;
 }
 
 pause_service () {
@@ -298,10 +339,7 @@ pause_service () {
             return
         fi
 
-        was_running=$( \
-            systemctl --user is-active "$service" >/dev/null 2>&1 \
-            && echo 0 || echo $? \
-        )
+        was_running=$(is_service_running)
 
         if [ $was_running -eq 0 ]; then
             stop_service
@@ -316,13 +354,25 @@ pause_service () {
 }
 
 status_service () {
+    if [ "$has_systemctl" != "0" ]; then
+        if [ $(is_service_running) -eq 0 ]; then
+            log "Running\n"
+            return 0
+        fi
+
+        err "Not running\n"
+        return 1
+    fi
+
     systemctl --user status "$service" | cat
 }
 
 uninstall_service () {
     stop_service 2>/dev/null || true
     rm "$servicedir/$service" 2>/dev/null || true
-    systemctl --user daemon-reload
+    if [ "$has_systemctl" == "0" ]; then
+        systemctl --user daemon-reload
+    fi
     log "Uninstalled service\n"
 }
 
