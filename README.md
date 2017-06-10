@@ -5,8 +5,7 @@ see [frizinak/provision.sh](https://github.com/frizinak/provision.sh) for more i
 wont work out of the box yet, will try to get to it soon.
 
 if you don't mind tinkering you could change `provdir` to the dir where you
-cloned frizinak/provision.sh and change all occurrences of friz.pro to whatever
-domain you've added to digital ocean, if any.
+cloned frizinak/provision.sh.
 
 # in short:
 
