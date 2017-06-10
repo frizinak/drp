@@ -45,7 +45,7 @@ droplet_size=     # required
 # ignore=         # optional set of rsync --excludes.
 # packages=       # optional set of apt packages to install after provisioning.
 # make=           # optional command to run when '$0 make' is called.
-# make_admin=     # optional command to run when '$0 make_admin' is called.
+# make_admin=     # optional command to run when '$0 make-admin' is called.
 EOF
 }
 
@@ -538,7 +538,7 @@ case $1 in
     make)              # Run whatever is defined in 'make'
         run_make
         ;;
-    make-admin)              # Run whatever is defined in 'make'
+    make-admin)        # Run whatever is defined in 'make_admin' as the admin user
         run_make_admin
         ;;
 
