@@ -290,7 +290,7 @@ EOF
 start_service () {
     if [ "$has_systemctl" != "0" ]; then
         stop_service
-        "$me" _run &> log &
+        "$me" _run &
         local pid=$!
         echo $pid > .drp.pid
         disown $pid
