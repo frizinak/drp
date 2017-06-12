@@ -58,7 +58,7 @@ php='php'
 drupal_version=8
 docroot='seven'
 provisioners='php7:seven'
-image='php-7-dev-ubuntu-16'
+image='ubuntu-16-10-x64'
 make='echo no make defined'
 make_admin='echo no make_admin defined'
 
