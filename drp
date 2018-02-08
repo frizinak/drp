@@ -12,7 +12,7 @@ err () {
 
 show_help () {
     local data=$( \
-        cat "$0" | grep -A100 -e '^### DRP ###'  | grep -oe '^\s*#.*' -Eoe '^\s+[a-z0-9|\-]+\).*' \
+        cat "$0" | grep -A1200 -e '^### DRP ###'  | grep -oe '^\s*#.*' -Eoe '^\s+[a-z0-9|\-]+\).*' \
         | grep -ve '^\s*#!' \
         | cut -d')' -f1- --output-delimiter=$' ' \
     )
@@ -35,6 +35,8 @@ db=               # required
 droplet_size=     # required
 # db_ignore=      # optional list of tables to ignore when mysqldumping
 # db_settings=    # optional sql commands to execute during db import
+# db_upload=      # optional command to run with 'drp upload-db' (e.g.: "s3cmd put {} s3://bucket/drp/\${sitekey}.sql.gz")
+# db_download=    # optional command to run with 'drp download-db' (e.g.: "s3cmd get s3://bucket/drp/\${sitekey}.sql.gz {}")
 # host=           # optional defaults to \$sitekey.
 # files=''        # optional list of paths that are downloaded with '$0 files'.
 # image=          # optional image to create the droplet from, defaults to '$image'.
@@ -46,6 +48,7 @@ droplet_size=     # required
 # packages=       # optional set of apt packages to install after provisioning.
 # make=           # optional command to run when '$0 make' is called.
 # make_admin=     # optional command to run when '$0 make-admin' is called.
+# drush_root=     # optional directory to run drush in (e.g.: public)
 EOF
 }
 
@@ -421,10 +424,18 @@ export_settings () {
     rsync -av --delete -e ssh $user@$ip:"$dst/config/" "$src/config"
 }
 
+last_db_dump () {
+    ls -1 "$dumps/"dbdump-*.sql.gz | sort | tail -n1
+}
+
+filename_db_dump () {
+    echo "$dumps/dbdump-$(date +%Y-%m-%d--%H-%M).sql.gz"
+}
+
 import_db () {
     server_info
 
-    local dump="$(ls -1 "$dumps/"dbdump-*.sql.gz | sort | tail -n1)"
+    local dump=$(last_db_dump)
 
     ssh $admin@$ip "mysql -e 'create database \`$db\`;'" 2>/dev/null || true
     if [ -f "$dump" ]; then
@@ -448,7 +459,7 @@ export_db () {
 
     mkdir -p "$dumps" 2>/dev/null || true
 
-    f="$dumps/dbdump-$(date +%Y-%m-%d--%H-%M).sql.gz"
+    f="$(filename_db_dump)"
 
     { \
         ssh $admin@$ip "mysqldump -d $db | gzip"; \
@@ -459,6 +470,31 @@ export_db () {
     if [ "$remove" != "" ]; then
         rm $remove
     fi
+}
+
+upload_db () {
+    server_info
+
+    local file=$(last_db_dump)
+    local cmd=$(echo $db_upload | sed "s#{}#'${file}'#")
+
+    eval $cmd
+}
+
+download_db () {
+    local file="$dumps/tmp-$(date +%s).sql.gz"
+    local cmd=$(echo "$db_download" | sed "s#{}#'${file}'#")
+
+    eval $cmd
+    local sha=$(sha1sum "$file" | cut -d' ' -f1)
+    local exists=$(sha1sum "$dumps/"dbdump* | grep "$sha")
+    if [ "$exists" != "" ]; then
+        err "We already have that dump at $(echo "$exists" | cut -d' ' -f2-)"
+        rm "$file"
+        return 1;
+    fi
+
+    mv "$file" "$(filename_db_dump)"
 }
 
 export_files () {
@@ -527,6 +563,13 @@ case $1 in
 
     import-db)         # Import latest dump
         import_db
+        ;;
+
+    download-db)       # Download the database using .drp::db_download
+        download_db
+        ;;
+    upload-db)         # Upload the database using .drp::db_upload
+        upload_db
         ;;
 
 # Files:
