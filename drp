@@ -236,13 +236,21 @@ update_loop () {
         done &
 
         while true; do
-            sleep 1
+            sleep 0.2
             sync=$(cat "$syncs" | sort | uniq)
             if [ "$sync" == "" ]; then
                 continue
             fi
             echo > "$syncs"
             for f in $sync; do
+                for sf in $sync; do
+                    if [ "$f" == "$sf" ]; then
+                        continue 1
+                    elif  [ "${f#"$sf/"}" != "$f" ]; then
+                        continue 2
+                    fi
+                done
+
                 path=${f#"$src/"}
                 if [ ! -e "$f" ]; then
                     path="$(dirname "$path")"
@@ -429,7 +437,7 @@ last_db_dump () {
 }
 
 filename_db_dump () {
-    echo "$dumps/dbdump-$(date +%Y-%m-%d--%H-%M).sql.gz"
+    echo "$dumps/dbdump-$(date +%Y-%m-%d--%H-%M-%S).sql.gz"
 }
 
 import_db () {
@@ -555,8 +563,27 @@ case $1 in
         shift
         exec_remote "$@"
         ;;
+    ltunnel)           # Tunnel: remote > local
+        server_info
+
+        rport="$2"
+        lport="$3"
+        ssh -R $rport:127.0.0.1:${lport:=$rport} "$user"@$ip
+        ;;
+    tunnel)            # Tunnel: local > remote
+        server_info
+
+        rport="$2"
+        lport="$3"
+        ssh -L $rport:127.0.0.1:${lport:=$rport} "$user"@$ip
+        ;;
 
 # DB:
+    mysql|sql)         # Start an interactive mysql session
+        server_info
+        ssh -ttt "${admin}"@$ip "mysql '$db'"
+        ;;
+
     dump|db)           # Dump the database and store in ./drp/dumps
         export_db
         ;;
