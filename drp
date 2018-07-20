@@ -64,6 +64,7 @@ provisioners='php7:seven'
 image='ubuntu-16-10-x64'
 make='echo no make defined'
 make_admin='echo no make_admin defined'
+rsync_args="--info=progress2 --exclude 'drp/' --exclude '.git' --exclude '*.sql.gz' --exclude '*.vim-mru' --exclude '.vim-tags'"
 
 if [ "$1" == "config" ]; then
     show_config
@@ -111,7 +112,6 @@ trap onExit EXIT SIGINT
 provdir="$HOME/dev/server"
 dumps="$src/drp/dumps"
 syncs="$src/drp/sync"
-rsync_args="--exclude 'drp/' --exclude '.git' --exclude '*.sql.gz' --exclude '*.vim-mru' --exclude '.vim-tags'"
 
 if [ "$ignore" == "" ]; then
     ignore=""
@@ -459,7 +459,7 @@ import_db () {
 
 export_db () {
     server_info
-    local ignores f
+    local ignores f last
 
     for i in $db_ignore; do
         ignores="$ignores --ignore-table=${db}.${i}"
@@ -468,16 +468,22 @@ export_db () {
     mkdir -p "$dumps" 2>/dev/null || true
 
     f="$(filename_db_dump)"
+    last="$(ls -1 "$dumps/dbdump-"* | sort | tail -n1)"
 
     { \
-        ssh $admin@$ip "mysqldump -d $db | gzip"; \
-        ssh $admin@$ip "mysqldump $db $ignores | gzip"; \
+        ssh $admin@$ip "mysqldump --skip-dump-date -d $db | gzip -n"; \
+        ssh $admin@$ip "mysqldump --skip-dump-date $db $ignores | gzip -n"; \
     } > "$f"
 
-    remove=$(ls -1 "$dumps/dbdump-"*.sql.gz | sort | head -n-10)
-    if [ "$remove" != "" ]; then
-        rm $remove
+    if diff "$last" "$f" &> /dev/null; then
+        echo "dump identical to $last"
+        rm "$last"
     fi
+
+    # remove=$(ls -1 "$dumps/dbdump-"*.sql.gz | sort | head -n-10)
+    # if [ "$remove" != "" ]; then
+    #     rm $remove
+    # fi
 }
 
 upload_db () {
