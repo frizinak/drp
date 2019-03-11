@@ -400,7 +400,7 @@ exec_remote_admin () {
 }
 
 drush () {
-    exec_remote $php .config/composer/vendor/bin/drush.php $drush_flags --php=/usr/bin/$php -r "$dst/$drush_root" $@
+    exec_remote $php .config/composer/vendor/bin/drush $drush_flags --php=/usr/bin/$php -r "$dst/$drush_root" $*
 }
 
 import_settings () {
